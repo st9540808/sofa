@@ -27,7 +27,7 @@ from sofa_models import SOFATrace
 from sofa_print import *
 import random 
 
-import sofa_ros2_preprocess
+from ros2_performance_test import sofa_ros2_preprocess
 
 sofa_fieldnames = [
     "timestamp",  # 0

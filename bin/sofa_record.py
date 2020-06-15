@@ -22,7 +22,7 @@ import platform
 
 from sofa_print import *
 
-import sofa_ros2_main
+from ros2_performance_test import sofa_ros2_main
 
 def service_get_cpuinfo(logdir, cfg):
     next_call = time.time()
