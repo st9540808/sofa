@@ -154,7 +154,10 @@ if __name__ == "__main__":
     group_report.add_argument('--with-gui', help='launch a http server to provide Web GUI.', action='store_true')
     group_report.add_argument('--nvsmi_time_zone', metavar='8', type=int, help='time zone for nvsmi_query.txt')
     group_report.add_argument('--is-idle-threshold', metavar='10', type=int, help='assign idle threshold value(percentage) to concurrency breakdown')
-	
+
+    parser.add_argument('--ros2_topic_whitelist', action='store_true')
+    parser.add_argument('--ros2_topic_blacklist', action='store_true')
+
     args = parser.parse_args()
     if args.logdir is not None:
         cfg.logdir = args.logdir + '/'

@@ -30,6 +30,7 @@ class SOFA_Config:
     use_diff = False # output csv file for sofa swarm-diff
     swarm_diff = False
     logdir = './sofalog/'
+    ros2logdir = './ros2log/'
     base_logdir = ''
     match_logdir = ''
     enable_vmstat = False
@@ -72,3 +73,5 @@ class SOFA_Config:
     nvprof_inside = False
     diskstat_filters = None
     no_perf_events = False 
+    ros2_topic_whitelist = False
+    ros2_topic_blacklist = False

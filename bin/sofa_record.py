@@ -22,6 +22,8 @@ import platform
 
 from sofa_print import *
 
+import sofa_ros2_main
+
 def service_get_cpuinfo(logdir, cfg):
     next_call = time.time()
     while True:
@@ -358,6 +360,9 @@ def sofa_record(command, cfg):
 
         subprocess.call('rm ' + os.getcwd() + '/perf.data 1> /dev/null 2> /dev/null', shell=True )
 
+        # Setup tracing ROS2
+        ros2_trace_main = sofa_ros2_main.trace_main(cfg)
+
         # Launch SOFA recording
         if command.find('docker') != -1:
             command_create = command.replace('docker run', 'docker create --cidfile=%s/cidfile.txt' % cfg.logdir)
@@ -407,11 +412,17 @@ def sofa_record(command, cfg):
         try:
             if os.path.isfile(cfg.logdir+'/cidfile.txt'):
                 p_container_app.wait() 
+            ros2_trace_main.start()
             p_perf.wait()
+            t_command_end = time.time()
+        except KeyboardInterrupt:
+            p_perf.terminate()
             t_command_end = time.time()
         except TimeoutExpired:
             print_error('perf: Timeout of profiling process')
             sys.exit(1)
+
+        ros2_trace_main.terminate()
 
         with open('%s/misc.txt' % logdir, 'w') as f_misc:
             vcores = 1
@@ -470,7 +481,8 @@ def sofa_record(command, cfg):
                 p_nvsmi_query.terminate()
                 print_info(cfg,"tried terminating nvidia-smi query")
             else:
-                open('%s/nvsmi_query.txt' % logdir, 'a').write('\nFailed\n')
+                pass
+                # open('%s/nvsmi_query.txt' % logdir, 'a').write('\nFailed\n')
         if p_nvprof != None:
             p_nvprof.terminate()
             print_info(cfg,"tried terminating nvprof")

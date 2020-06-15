@@ -27,6 +27,7 @@ from sofa_models import SOFATrace
 from sofa_print import *
 import random 
 
+import sofa_ros2_preprocess
 
 sofa_fieldnames = [
     "timestamp",  # 0
@@ -1188,7 +1189,8 @@ def sofa_preprocess(cfg):
         with open(logdir + 'net.tmp', 'w') as f:
             subprocess.check_call(
                 ["tcpdump", "-q", "-n", "-tt", "-r",
-                "%s/sofa.pcap"%logdir ], stdout=f, stderr=subprocess.DEVNULL)
+                "%s/sofa.pcap"%logdir, "udp[8:4] == 0x52545053"], stdout=f, stderr=subprocess.DEVNULL)
+
         with open(logdir + 'net.tmp') as f:
             packets = lines = f.readlines()
             print_info(cfg,"Length of net_traces = %d" % len(packets))
@@ -2100,6 +2102,9 @@ def sofa_preprocess(cfg):
         sofatrace.y_field = 'duration'
         sofatrace.data = cuda_api_traces_viz
         traces.append(sofatrace)
+
+    # Preprocess ROS2 eBPF log
+    traces.extend(sofa_ros2_preprocess.run(cfg))
 
     traces_to_json(traces, logdir + 'report.js', cfg)
     print_progress(cfg,
