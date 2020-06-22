@@ -84,6 +84,7 @@
         <a href="#n"><i class="fa fa-line-chart"></i> Network Utilization</a>
   </div>
 
+   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
    <script src="https://code.highcharts.com/highcharts.js"></script>
    <script src="https://code.highcharts.com/modules/exporting.js"></script>
    <a name="e">
@@ -91,7 +92,6 @@
    </a>
    <script src="report.js"></script>
    <script src="timeline.js"></script>
-  </a>
 <a name="n">
 <div class=main id="main_net"></div>
   <script>
@@ -136,6 +136,10 @@
   autorange: true, 
   //range: [86.8700008333, 138.870004167], 
   type: 'linear'
+  },
+  legend: {
+    x: -0.2,
+    y: 0.5
   }
   };
 

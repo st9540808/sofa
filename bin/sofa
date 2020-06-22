@@ -6,18 +6,21 @@ import json
 import multiprocessing as mp
 import os
 import sys
+import socket
 from functools import partial
 from pathlib import Path
 
 import numpy as np
 
-from sofa_analyze import *
+#from sofa_analyze import *
 from sofa_config import *
-from sofa_ml import sofa_swarm_diff
-from sofa_preprocess import *
+#from sofa_ml import sofa_swarm_diff
+#from sofa_preprocess import *
 from sofa_print import *
 from sofa_record import *
 from sofa_viz import *
+
+import sofa_ros2_ds
 
 if __name__ == "__main__":
     cfg = SOFA_Config()
@@ -155,12 +158,19 @@ if __name__ == "__main__":
     group_report.add_argument('--nvsmi_time_zone', metavar='8', type=int, help='time zone for nvsmi_query.txt')
     group_report.add_argument('--is-idle-threshold', metavar='10', type=int, help='assign idle threshold value(percentage) to concurrency breakdown')
 
-    parser.add_argument('--ros2_topic_whitelist', action='store_true')
-    parser.add_argument('--ros2_topic_blacklist', action='store_true')
+    group_ros2 = parser.add_argument_group('SOFA ROS2 Support')
+    group_ros2.add_argument('--ds', help="enable distributed profiling for ROS2", action='store_true')
+    group_ros2.add_argument('--ros2_topic_whitelist', action='store_true')
+    group_ros2.add_argument('--ros2_topic_blacklist', action='store_true')
 
     args = parser.parse_args()
     if args.logdir is not None:
         cfg.logdir = args.logdir + '/'
+
+    if args.ds:
+        cfg.logdir = os.path.join(os.getcwd(), socket.gethostname() + '_' + 'sofalog', '')
+        print_hint('enable distributed profiling for ROS2')
+        print_hint('logdir changed to: ' + cfg.logdir)
 
     if args.command is not None:
         command = args.command[0]
@@ -327,16 +337,22 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     if command == 'stat':
+        from sofa_analyze import sofa_analyze
+        from sofa_preprocess import sofa_preprocess
         sofa_record(usr_command, cfg)
         sofa_preprocess(cfg)
         sofa_analyze(cfg)
     elif command == 'record':
         sofa_record(usr_command, cfg)
     elif command == 'preprocess':
+        from sofa_preprocess import sofa_preprocess
         sofa_preprocess(cfg)
     elif command == 'analyze':
+        from sofa_analyze import sofa_analyze
         sofa_analyze(cfg)
     elif command == 'diff': # register a new command here 
+        from sofa_preprocess import sofa_preprocess
+        from sofa_ml import sofa_swarm_diff
         if args.base_logdir and args.match_logdir: 
             cfg.base_logdir = args.base_logdir 
             cfg.match_logdir = args.match_logdir 
@@ -356,7 +372,12 @@ if __name__ == "__main__":
         sofa_clean(cfg)
 
     elif command == 'report':
-        if cfg.cluster_ip:
+        from sofa_analyze import sofa_analyze, cluster_analyze
+        from sofa_preprocess import sofa_preprocess
+        if args.ds:
+            sofa_ros2_ds.ds_preprocess(cfg)
+            sofa_ros2_ds.ds_viz(cfg)
+        elif cfg.cluster_ip:
             cluster = cfg.cluster_ip.split(',')
             tmp_dir = cfg.logdir
             for ip in cluster:

@@ -157,6 +157,7 @@ def cpu_trace_read(sample, cfg, t_offset, cpu_mhz_xp, cpu_mhz_fp):
 def net_trace_read(packet, cfg, t_offset):
     #21234 1562233011.469681 IP 192.168.88.88.56828 > 224.224.255.255.5400: UDP, length 851
     #21235 1562233011.471352 IP 10.57.185.172.8554 > 192.168.88.88.53528: tcp 0
+    #xxxxx 1581560421.017534 IP 127.0.0.1.46267 > 127.0.0.1.7413: UDP, bad length 55392 > 1472
     fields = packet.split()
     time = float(fields[0])
     
@@ -170,7 +171,10 @@ def net_trace_read(packet, cfg, t_offset):
 
     protocol = fields[5]
     if protocol == 'UDP,': 
-        payload = int(fields[7])
+        try:
+            payload = int(fields[7])
+        except ValueError:
+            payload = int(fields[8])
     elif protocol == 'tcp': 
         payload = int(fields[6])
     else:
@@ -410,7 +414,7 @@ def sofa_preprocess(cfg):
             else:
                 option_container_symbols = '' 
             option_kernel_symbols = ' --kallsym  %s/kallsyms ' % logdir
-            subprocess.call('perf script -F time,pid,tid,event,ip,sym,dso,symoff,period,brstack,brstacksym -i %s/perf.data %s %s'
+            subprocess.call('perf script -F time,pid,tid,event,ip,sym,dso,symoff,period,brstack,brstacksym -i %s/perf.data %s %s -f'
                             % (logdir, option_kernel_symbols, option_container_symbols),
                             shell=True, stdout=logfile, stderr=subprocess.DEVNULL)
 
@@ -834,7 +838,7 @@ def sofa_preprocess(cfg):
                         if cfg.absolute_timestamp:
                             t_begin = t + cfg.time_base
                         else:
-                            t_begin = t
+                            t_begin = t - cfg.cpu_time_offset
                         
                         deviceId = cpuid = -1
                         event = -1
@@ -2104,7 +2108,7 @@ def sofa_preprocess(cfg):
         traces.append(sofatrace)
 
     # Preprocess ROS2 eBPF log
-    traces.extend(sofa_ros2_preprocess.run(cfg))
+    # traces.extend(sofa_ros2_preprocess.run(cfg))
 
     traces_to_json(traces, logdir + 'report.js', cfg)
     print_progress(cfg,
