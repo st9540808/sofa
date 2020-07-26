@@ -54,7 +54,7 @@ Highcharts.chart('container', {
             },
             tooltip: {
                 headerFormat: '<b>Category: {series.name}</b><br>',
-                pointFormat: '[{point.x} s]  Y:{point.y}, Name: {point.name}'
+                pointFormat: '[{point.x} s]  Y:{point.y:.5f}{point.unit}, Name: {point.name}'
             },
             turboThreshold: 0 
 

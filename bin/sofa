@@ -169,6 +169,7 @@ if __name__ == "__main__":
 
     if args.ds:
         cfg.logdir = os.path.join(os.getcwd(), socket.gethostname() + '_' + 'sofalog', '')
+        cfg.enable_ds = True
         print_hint('enable distributed profiling for ROS2')
         print_hint('logdir changed to: ' + cfg.logdir)
 
