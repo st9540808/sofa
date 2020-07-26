@@ -15,6 +15,7 @@ import ipaddress
 # sys.path.insert(0, '/home/st9540808/Desktop/sofa/bin')
 import sofa_models, sofa_preprocess
 import sofa_config
+import sofa_print
 
 colors_send = ['#14f2e0', '#41c8e5', '#6e9eeb']
 colors_recv = ['#9a75f0', '#c74bf6', '#f320fa', '#fe2bcc']
@@ -39,16 +40,25 @@ sofa_ros2_fieldnames = [
     "msg_id"]     # 14
 
 # @profile
-def extract_individual_rosmsg(df_send, df_recv, *df_others):
+def extract_individual_rosmsg(df_send_, df_recv_, *df_others_):
     """ Return a dictionary with topic name as key and
         a list of ros message as value.
         Structure of return value: {topic_name: {(guid, seqnum): log}}
         where (guid, seqnum) is a msg_id
     """
     # Convert timestamp to unix time
-    unix_time_off = statistics.median(sofa_time.get_unix_mono_diff() for i in range(100))
-    for df in (df_send, df_recv, *df_others):
-        df['ts'] = df['ts'] + unix_time_off
+    # unix_time_off = statistics.median(sofa_time.get_unix_mono_diff() for i in range(100))
+    # for df in (df_send, df_recv, *df_others):
+    #     df['ts'] = df['ts'] + unix_time_off
+    df_send_[1]['ts'] = df_send_[1]['ts'] + df_send_[0].cpu_time_offset + df_send_[0].unix_time_off
+    df_recv_[1]['ts'] = df_recv_[1]['ts'] + df_recv_[0].cpu_time_offset + df_recv_[0].unix_time_off
+    df_others = []
+    for cfg_to_pass, df_other in df_others_:
+        df_other['ts'] = df_other['ts'] + cfg_to_pass.cpu_time_offset + cfg_to_pass.unix_time_off
+        df_others.append(df_other)
+
+    df_send = df_send_[1]
+    df_recv = df_recv_[1]
 
     # sort by timestamp
     df_send.sort_values(by=['ts'], ignore_index=True)
@@ -134,6 +144,8 @@ def extract_individual_rosmsg(df_send, df_recv, *df_others):
         df = all_subscriptions_log[guid]
         df_recv_partial = all_subscriptions_log[guid].copy()
         add_recvchange_calls = df[~pd.isna(df['seqnum'])] # get all not nan seqnums in log
+        if 'cyclonedds' in df['layer'].unique():
+            add_recvchange_calls = df[df['func'] == 'ddsi_udp_conn_read exit']
 
         all_sub = pd.unique(df['subscriber']) # How many subscribers subscribe to this topic?
         subs_map = {sub: (df['subscriber'] == sub) &
@@ -145,11 +157,31 @@ def extract_individual_rosmsg(df_send, df_recv, *df_others):
         for idx, add_recvchange_call in add_recvchange_calls.iterrows():
             ts = add_recvchange_call['ts']
             subaddr = add_recvchange_call.at['subscriber']
-            seqnum = add_recvchange_call.loc['seqnum']
+            seqnum = add_recvchange_call.at['seqnum']
 
             # Consider missing `rmw_take_with_info exit` here
             try:
                 rmw_take_idx = df.loc[(df['ts'] > ts) & subs_map[subaddr]]['ts'].idxmin()
+
+                if 'cyclonedds' in df['layer'].unique():
+                    free_sample = df.loc[(df['func'] == 'free_sample') & (df['seqnum'] == seqnum)]
+                    if len(free_sample) == 0:
+                        continue
+                    free_sample = free_sample.iloc[0]
+                    if free_sample['ts'] > df.at[rmw_take_idx, 'ts']:
+                        rmw_take_idx = df.loc[(df['ts'] > free_sample['ts']) & subs_map[subaddr]]['ts'].idxmin()
+                # if 'cyclonedds' in df['layer'].unique():
+                #     free_sample = df_recv.loc[(df_recv['ts'] > ts) &
+                #                               (df_recv['func'] == 'free_sample') &
+                #                               (df_recv['pid'] == df.at[rmw_take_idx, 'pid']) &
+                #                               (df_recv['seqnum'] == seqnum)]
+                #     free_sample_idx = free_sample.idxmax()
+                #     if len(free_sample) == 0:
+                #         rmw_take_idx = df.loc[(df['ts'] > free_sample['ts']) & subs_map[subaddr]]['ts'].idxmin()
+                #         print(df.loc[rmw_take_idx])
+                    # free_sample() should be called in rmw_take, therefore
+                    # free_sample() happened before rmw_take_with_info returns
+
                 df_recv_partial.at[rmw_take_idx, 'seqnum'] = seqnum
 
                 # TODO: Group by ip port in cls_ingress
@@ -392,10 +424,11 @@ def ros_msgs_trace_read(items, cfg):
                 time = start['ts'] - cfg.time_base
             trace['timestamp'] = time
             trace['duration'] = (end['ts'] - start['ts']) * 1e3 # ms
-            trace['name'] = "[%s] %s -> [%s] %s <br>Topic Name: %s<br>Transmission: %s -> %s" % \
+            trace['name'] = "[%s] %s -> [%s] %s <br>Topic Name: %s<br>Transmission: %s -> %s<br>Seqnum: %d" % \
                             (start['layer'], start['func'], end['layer'], end['func'],
                              start['topic_name'],
-                             start['comm'], end['comm'])
+                             start['comm'], end['comm'],
+                             int(start['seqnum']))
             trace['unit'] = 'ms'
             trace['msg_id'] = msg_id
             traces.append(trace)
@@ -419,6 +452,28 @@ def ros_msgs_trace_read_ros_lat_send(items, cfg):
         "category",   # 12
         "unit",
         "msg_id"]
+
+    traces = []
+    topic_name, all_msgs_log = items
+    for msg_id, msg_log in all_msgs_log.items():
+        trace = dict(zip(sofa_ros2_fieldnames, itertools.repeat(-1)))
+        start = get_rcl_publish(msg_log)
+        end = msg_log.loc[msg_log['func'] == 'write_sample_gc'].iloc[0]
+        time = end['ts']
+        if cfg is not None and not cfg.absolute_timestamp:
+            time = end['ts'] - cfg.time_base
+        trace['timestamp'] = time
+        trace['duration'] = (end['ts'] - start['ts']) * 1e3 # ms
+        trace['name'] = "[%s] %s -> [%s] %s <br>Topic Name: %s<br>Transmission: %s -> %s<br>Seqnum: %d" % \
+                            (start['layer'], start['func'], end['layer'], end['func'],
+                             start['topic_name'],
+                             start['comm'], end['comm'],
+                             int(start['seqnum']))
+        trace['unit'] = 'ms'
+        trace['msg_id'] = msg_id
+        traces.append(trace)
+    traces = pd.DataFrame(traces)
+    return traces
 
 def ros_msgs_trace_read_os_lat_send(items, cfg):
     sofa_ros2_fieldnames = [
@@ -719,7 +774,68 @@ def find_outliers(all_traces, filt):
     sofatrace_targets.data = targets_trace
     return sofatrace_targets
 
-def run(cfg):
+def find_retransmissions(items, cfg):
+    traces = []
+    topic_name, all_msgs_log = items
+    for msg_id, msg_log in all_msgs_log.items():
+        start = get_rcl_publish(msg_log)
+        end = msg_log.iloc[-1]
+        if start.at['layer'] != 'rcl': # skip when the first function call is not from rcl
+            continue
+
+        all_egress = msg_log.loc[msg_log['layer'] == 'cls_egress']
+        msgids = all_egress['msg_id'].unique()
+        if 'DATA' in msgids and len(msgids) == 1 and len(all_egress) > 1:
+            first_xmit = all_egress.iloc[0]
+            for _, egress in all_egress.iloc[1:].iterrows():
+                trace = dict(zip(sofa_ros2_fieldnames, itertools.repeat(-1)))
+
+                time = egress['ts']
+                if cfg is not None and not cfg.absolute_timestamp:
+                    time = egress['ts'] - cfg.time_base
+                trace['timestamp'] = time
+                trace['duration'] = (egress['ts'] - first_xmit['ts']) * 1e3 # ms
+                trace['name'] = ("Retransmission (time to first transmission)<br>" + \
+                                 "Topic Name: %s<br>Transmission: %s -> %s<br>Seqnum: %d") % \
+                                (start['topic_name'], start['comm'], end['comm'], int(start['seqnum']))
+                trace['unit'] = 'ms'
+                trace['msg_id'] = msg_id
+                traces.append(trace)
+                print(trace)
+    return pd.DataFrame(traces)
+
+def find_sample_drop(items, cfg):
+    traces = []
+    topic_name, all_msgs_log = items
+    for msg_id, msg_log in all_msgs_log.items():
+        start = get_rcl_publish(msg_log)
+        end = msg_log.iloc[-1]
+        if start.at['layer'] != 'rcl': # skip when the first function call is not from rcl
+            continue
+
+        if 'cyclonedds' in msg_log['layer'].unique():
+            free_sample = msg_log[(msg_log['func'] == 'free_sample')] # TODO: change to 'rmw_take_with_info exit'
+            receive = msg_log[(msg_log['func'] == 'ddsi_udp_conn_read exit')]
+            if len(free_sample) == 1 or len(receive) == 0:
+                continue
+        else:
+            continue
+        trace = dict(zip(sofa_ros2_fieldnames, itertools.repeat(-1)))
+
+        time = msg_log.iloc[-1]['ts']
+        if cfg is not None and not cfg.absolute_timestamp:
+            time = msg_log.iloc[-1]['ts'] - cfg.time_base
+        trace['timestamp'] = time
+        trace['duration'] = 1 # drop one sample
+        trace['name'] = "Sample drop<br>Topic Name: %s<br>Transmission: %s -> %s<br>Seqnum: %d" % \
+                        ( start['topic_name'], start['comm'], end['comm'], int(start['seqnum']))
+        trace['unit'] = ''
+        trace['msg_id'] = msg_id
+        traces.append(trace)
+        print(trace)
+    return pd.DataFrame(traces)
+
+def run(cfg, cfg2=None):
     """ Start preprocessing. """
     # Read all log files generated by ebpf_ros2_*
     # TODO: convert addr and port to uint32, uint16
@@ -728,22 +844,44 @@ def run(cfg):
 
     send_log = 'send_log.csv'
     recv_log = 'recv_log.csv'
-    cvs_files_others = ['cls_bpf_log.csv']
+    other_log = ['cls_bpf_log.csv']
 
     if cfg is None:
         cfg = sofa_config.SOFA_Config()
+    elif cfg2 is None:
+        cfg2 = cfg
+
+    with open(os.path.join(cfg.logdir, 'unix_time_off.txt')) as f:
+        lines = f.readlines()
+        cfg.unix_time_off = float(lines[0])
+        sofa_print.print_hint('unix time offset:' + str(cfg.unix_time_off) + ' in ' + cfg.logdir)
+
+    with open(os.path.join(cfg2.logdir, 'unix_time_off.txt')) as f:
+        lines = f.readlines()
+        cfg.unix_time_off = float(lines[0])
+        sofa_print.print_hint('unix time offset:' + str(cfg2.unix_time_off) + ' in ' + cfg2.logdir)
 
     send_log = os.path.join(cfg.logdir, cfg.ros2logdir, 'send_log.csv')
-    recv_log = os.path.join(cfg.logdir, cfg.ros2logdir, 'recv_log.csv')
-    for idx in range(len(cvs_files_others)):
-        cvs_files_others[idx] = os.path.join(cfg.logdir, cfg.ros2logdir, cvs_files_others[idx])
+    recv_log = os.path.join(cfg2.logdir, cfg2.ros2logdir, 'recv_log.csv')
+    print(send_log, recv_log)
+    cvs_files_others = []
+    for idx in range(len(other_log)):
+        print(os.path.join(cfg.logdir, cfg.ros2logdir, other_log[idx]))
+        cvs_files_others.append(
+            (cfg, os.path.join(cfg.logdir, cfg.ros2logdir, other_log[idx])))
+    if cfg2 is not cfg:
+        for idx in range(len(other_log)):
+            print(os.path.join(cfg2.logdir, cfg2.ros2logdir, other_log[idx]))
+            cvs_files_others.append(
+                (cfg2, os.path.join(cfg2.logdir, cfg2.ros2logdir, other_log[idx]))
+            )
 
-    df_send = read_csv(send_log)
-    df_recv = read_csv(recv_log)
+    df_send = (cfg, read_csv(send_log))
+    df_recv = (cfg2, read_csv(recv_log))
     df_others = []
-    for csv_file in cvs_files_others:
+    for cfg_to_pass, csv_file in cvs_files_others:
         try:
-            df_others.append(read_csv(csv_file))
+            df_others.append((cfg_to_pass, read_csv(csv_file)))
         except pd.errors.EmptyDataError as e:
             print(csv_file + ' is empty')
 
@@ -762,6 +900,15 @@ def run(cfg):
             res.append(future.result())
     print(res)
     # res = ros_msgs_trace_read(next(iter(all_msgs.items())), cfg=cfg)
+
+    ros_lat_send = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_res = {executor.submit(ros_msgs_trace_read_ros_lat_send, item, cfg=cfg): item for item in all_msgs.items()}
+        for future in concurrent.futures.as_completed(future_res):
+            item = future_res[future]
+            topic = item[0]
+            ros_lat_send.append(future.result())
+    print(ros_lat_send)
 
     # Calculate time spent in OS for all topics
     os_lat_send = []
@@ -804,6 +951,24 @@ def run(cfg):
     print(dds_lat_recv)
     print(ros_executor_recv)
 
+    retransmissions = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_res = {executor.submit(find_retransmissions, item, cfg=cfg): item for item in all_msgs.items()}
+        for future in concurrent.futures.as_completed(future_res):
+            item = future_res[future]
+            topic = item[0]
+            retransmissions.append(future.result())
+    print(retransmissions)
+
+    sample_drop = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_res = {executor.submit(find_sample_drop, item, cfg=cfg): item for item in all_msgs.items()}
+        for future in concurrent.futures.as_completed(future_res):
+            item = future_res[future]
+            topic = item[0]
+            sample_drop.append(future.result())
+    print(sample_drop)
+
     sofatrace = sofa_models.SOFATrace()
     sofatrace.name = 'ros2_latency'
     sofatrace.title = 'ros2_latency'
@@ -811,6 +976,14 @@ def run(cfg):
     sofatrace.x_field = 'timestamp'
     sofatrace.y_field = 'duration'
     sofatrace.data = pd.concat(res) # TODO:
+
+    sofatrace_ros_lat_send = sofa_models.SOFATrace()
+    sofatrace_ros_lat_send.name = 'ros2_lat_send'
+    sofatrace_ros_lat_send.title = 'ros2_lat_send'
+    sofatrace_ros_lat_send.color = '#D15817'
+    sofatrace_ros_lat_send.x_field = 'timestamp'
+    sofatrace_ros_lat_send.y_field = 'duration'
+    sofatrace_ros_lat_send.data = pd.concat(ros_lat_send)
 
     sofatrace_ros_executor_recv = sofa_models.SOFATrace()
     sofatrace_ros_executor_recv.name = 'ros2_executor_recv'
@@ -852,6 +1025,23 @@ def run(cfg):
     sofatrace_os_lat_recv.y_field = 'duration'
     sofatrace_os_lat_recv.data = pd.concat(os_lat_recv)
 
+    sofatrace_retransmissions = sofa_models.SOFATrace()
+    sofatrace_retransmissions.name = 'retransmissions'
+    sofatrace_retransmissions.title = 'retransmissions'
+    sofatrace_retransmissions.color = 'Crimson'
+    sofatrace_retransmissions.x_field = 'timestamp'
+    sofatrace_retransmissions.y_field = 'duration'
+    sofatrace_retransmissions.data = pd.concat(retransmissions)
+    sofatrace_retransmissions.highlight = True
+
+    sofatrace_sample_drop = sofa_models.SOFATrace()
+    sofatrace_sample_drop.name = 'sample_drop'
+    sofatrace_sample_drop.title = 'sample_drop'
+    sofatrace_sample_drop.color = 'DarkCyan'
+    sofatrace_sample_drop.x_field = 'timestamp'
+    sofatrace_sample_drop.y_field = 'duration'
+    sofatrace_sample_drop.data = pd.concat(sample_drop)
+    sofatrace_sample_drop.highlight = True
 
     sofatrace_targets = find_outliers(
         [sofatrace, sofatrace_ros_executor_recv, \
@@ -871,9 +1061,10 @@ def run(cfg):
     # highlight.data = pd.concat([res2])
 
     return [sofatrace,
-            sofatrace_ros_executor_recv,
+            sofatrace_ros_lat_send, sofatrace_ros_executor_recv,
             sofatrace_dds_lat_send, sofatrace_dds_lat_recv,
-            sofatrace_os_lat_send, sofatrace_os_lat_recv, sofatrace_targets]
+            sofatrace_os_lat_send, sofatrace_os_lat_recv,
+            sofatrace_targets, sofatrace_retransmissions, sofatrace_sample_drop]
 
 def benchmarking():
     read_csv = functools.partial(pd.read_csv, dtype={

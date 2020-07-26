@@ -5,3 +5,4 @@ class SOFATrace:
     color = []
     x_field = []
     y_field = []
+    highlight = None

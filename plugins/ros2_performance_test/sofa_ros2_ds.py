@@ -10,6 +10,7 @@ import numpy as np
 import subprocess
 import sys
 import socket
+import copy
 from bs4 import BeautifulSoup
 from distutils.dir_util import copy_tree
 
@@ -55,7 +56,6 @@ def ds_preprocess(cfg):
 
         cfg.logdir = './' + str(nodes_record_dir[i]) + '/'
         sofa_preprocess(cfg)
-        cfg.logdir = save_logdir
         sofa_analyze(cfg)
 
     # pid2y_pos_dic = ds_connect_preprocess(cfg)
@@ -74,29 +74,63 @@ def ds_viz(cfg):
     nodes_record_dir.pop(idx)
 
     master = BeautifulSoup(open(os.path.join(cfg.logdir, 'index.html')), 'html.parser')
+    with open(os.path.join(local, 'timeline.js')) as f:
+        sofa_fig_highchart = f.read()
+    sidenav = master.find('div', {'class': 'sidenav'})
+    subtitle = master.new_tag('figcaption', **{'class': 'sidenav-element-title'})
+    subtitle.string = socket.gethostname()
+    sidenav.insert(0, subtitle)
 
-    for dir in nodes_record_dir:
-        with open(os.path.join(dir, 'index.html')) as f:
-            dir_index_soup = BeautifulSoup(f, 'html.parser')
-            sofa_fig = dir_index_soup.find('div', id='container')
-            sofa_fig['id'] = 'container' + '2'
+    for i, dir in enumerate(nodes_record_dir, 2):
+        hostname = re.sub('_sofalog$', '', dir)
+        subtitle = master.new_tag('figcaption', **{'class': 'sidenav-element-title'})
+        subtitle.string = hostname
+        sidenav.append(subtitle)
+        
+        # sofa figure
+        sofa_fig = BeautifulSoup('''
+        <a name="e">
+        <div id="container" style="min-width: 310px; height: 400px; max-width: 90%; margin-left: 280px; padding-top: 50px">
+        </div></a>        
+        ''')
 
-        with open(os.path.join(dir, 'timeline.js')) as f:
-            sofa_fig_highchart = f.read()
-            sofa_fig_highchart = sofa_fig_highchart.replace('container',
-                                                            'container' + '2')
+        sofa_fig.a['name'] = 'e' + str(i)
+        sofa_fig.div['id'] = 'container' + str(i)
+        new_sofa_fig_highchart = sofa_fig_highchart.replace('container',
+                                                            'container' + str(i))
+        sofa_fig_sidenav = BeautifulSoup('''
+        <a href="#e"><i class="fa fa-image"></i> Functions and Events</a>
+        ''')
+        sofa_fig_sidenav.a['href'] = '#e' + str(i)
+        sidenav.append(sofa_fig_sidenav.a)
 
         report   = master.new_tag('script', src=os.path.join(dir, 'report.js'))
         timeline = master.new_tag('script', src=os.path.join(dir, 'timeline.js'))
 
-        master.body.append(sofa_fig)
+        master.body.append(sofa_fig.a)
         master.body.append(report)
         master.body.append(timeline)
         
         copied_sofalog_dir = os.path.join(local, dir)
         copy_tree(dir, copied_sofalog_dir)
         with open(os.path.join(copied_sofalog_dir, 'timeline.js'), 'w') as f:
-            f.write(sofa_fig_highchart)
+            f.write(new_sofa_fig_highchart)
+        
+        # Plotly
+        sofa_plotly = master.find('a', attrs={'name':'n'})
+        sofa_plotly = copy.copy(sofa_plotly)
+        sofa_plotly['name'] = 'n' + str(i)
+        sofa_plotly.div['id'] = 'main_net' + str(i)
+        sofa_plotly.script.string = sofa_plotly.script.string.replace('netbandwidth.csv',
+            os.path.join(dir, 'netbandwidth.csv'))
+        sofa_plotly.script.string = sofa_plotly.script.string.replace('main_net', 'main_net' + str(i))
+        sofa_plotly_sidenav = BeautifulSoup('''
+        <a href="#n"><i class="fa fa-line-chart"></i> Network Utilization</a>
+        ''')
+        sofa_plotly_sidenav.a['href'] = '#n' + str(i)
+        sidenav.append(sofa_plotly_sidenav.a)
+
+        master.body.append(sofa_plotly)
 
         print(master.prettify())
 

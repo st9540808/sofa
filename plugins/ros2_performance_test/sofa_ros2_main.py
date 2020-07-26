@@ -13,10 +13,17 @@ from bcc import BPF
 # sys.path.insert(0, '/home/st9540808/Desktop/sofa/bin')
 import sofa_print
 import sofa_config
+import statistics, sofa_time
 
 # all processes will be interrupt when enter a Ctrl-C to sofa_ros2_main.py
 class trace_main:
     def __init__(self, cfg=None):
+        if cfg is not None:
+            unix_time_off = statistics.median(sofa_time.get_unix_mono_diff() for i in range(100))
+            with open('%s/unix_time_off.txt' % cfg.logdir, 'w') as logfile:
+                unix_time_off = sofa_time.get_unix_mono_diff()
+                logfile.write(str('%.9lf' % unix_time_off)+'\n')
+
         if cfg is not None:
             if cfg.ros2_topic_whitelist:
                 sofa_print.print_hint("enable ros2 topic whitelist")

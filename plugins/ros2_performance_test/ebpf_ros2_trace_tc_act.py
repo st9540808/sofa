@@ -5,6 +5,7 @@ import pyroute2
 import time
 import sys
 import os
+import ctypes as ct
 import multiprocessing
 import sofa_ros2_utilities
 from sofa_ros2_utilities import perf_callback_factory
@@ -16,6 +17,7 @@ import sofa_config
 #mode = BPF.XDP
 device = 'enx00e04c68006a'
 device = 'enp0s25'
+device = 'enx00e04c6803b3'
 device = 'lo'
 mode = BPF.SCHED_CLS
 
@@ -30,6 +32,15 @@ class trace_tc_act(multiprocessing.Process):
     def print_cls_egress(self, *args):
         d = args[0]
         d['msg_id'] = {0x15: 'DATA', 0x16: 'DATAFRAG'}[d['msg_id']]
+
+    def print_skb_event(self, cpu, data, size):
+        class SkbEvent(ct.Structure):
+            _fields_ =  [ ("magic", ct.c_uint32),
+                          ("raw", ct.c_ubyte * (size - ct.sizeof(ct.c_uint32))) ]
+        
+        skb_event = ct.cast(data, ct.POINTER(SkbEvent)).contents
+        print(bytes(skb_event.raw))
+
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -68,6 +79,7 @@ class trace_tc_act(multiprocessing.Process):
 
         b["cls_egress"].open_perf_buffer(self.print_cls_egress)
         b["cls_ingress"].open_perf_buffer(self.print_cls_ingress)
+        # b["skb_events"].open_perf_buffer(self.print_skb_event)
         while not self.set.is_set():
             try:
                 b.perf_buffer_poll(timeout=1000)
@@ -82,6 +94,8 @@ class trace_tc_act(multiprocessing.Process):
 
 if __name__ == "__main__":
     cfg = sofa_config.SOFA_Config()
+    cfg.logdir = ''
+    cfg.ros2logdir = ''
 
     cflags = []
     if cfg.ros2_topic_whitelist:

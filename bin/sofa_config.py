@@ -75,3 +75,5 @@ class SOFA_Config:
     no_perf_events = False 
     ros2_topic_whitelist = False
     ros2_topic_blacklist = False
+    unix_time_off = 0
+    enable_ds = False

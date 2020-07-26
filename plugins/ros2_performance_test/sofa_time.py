@@ -21,13 +21,13 @@ librt = ctypes.CDLL('librt.so.1', use_errno=True)
 clock_gettime = librt.clock_gettime
 clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
 
-if not os.path.isfile(os.path.abspath('libtime_adjust_client.so')):
-    subprocess.call(['gcc', '-fPIC', '-c', 'time_adjust_client.c'])
-    subprocess.call(['gcc', '-shared', '-o', 'libtime_adjust_client.so', 'time_adjust_client.o'])
-    subprocess.call(['rm', 'time_adjust_client.o'])
-libtime_adjust_client = ctypes.CDLL(os.path.abspath('libtime_adjust_client.so'))
-get_time_offset = libtime_adjust_client.get_time_offset
-get_time_offset.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_double)]
+# if not os.path.isfile(os.path.abspath('libtime_adjust_client.so')):
+#     subprocess.call(['gcc', '-fPIC', '-c', 'time_adjust_client.c'])
+#     subprocess.call(['gcc', '-shared', '-o', 'libtime_adjust_client.so', 'time_adjust_client.o'])
+#     subprocess.call(['rm', 'time_adjust_client.o'])
+# libtime_adjust_client = ctypes.CDLL(os.path.abspath('libtime_adjust_client.so'))
+# get_time_offset = libtime_adjust_client.get_time_offset
+# get_time_offset.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_double)]
 
 def get_monotonic_time():
     if sys.version_info[0] == 3:

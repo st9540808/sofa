@@ -364,6 +364,8 @@ def traces_to_json(traces, path, cfg):
                     "data": json.loads(
                         trace.data.to_json(
                             orient='records'))}
+                if trace.highlight is not None:
+                    sofa_series["marker"] = {"radius": 3, "symbol": "square"}
                 json.dump(sofa_series, f)
                 trace.data.rename(
                     columns={
@@ -2108,7 +2110,13 @@ def sofa_preprocess(cfg):
         traces.append(sofatrace)
 
     # Preprocess ROS2 eBPF log
-    # traces.extend(sofa_ros2_preprocess.run(cfg))
+    cfg2 = SOFA_Config()
+    if cfg.enable_ds and cfg.logdir.find('Prestige') != -1:
+        cfg2.logdir = './st9540808-ThinkPad-X220_sofalog/'
+        cfg.cpu_time_offset = 1592732836.59
+        cfg2.cpu_time_offset = 1592753616.59
+        traces.extend(sofa_ros2_preprocess.run(cfg, cfg2))
+    traces.extend(sofa_ros2_preprocess.run(cfg))
 
     traces_to_json(traces, logdir + 'report.js', cfg)
     print_progress(cfg,

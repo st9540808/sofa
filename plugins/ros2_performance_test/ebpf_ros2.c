@@ -17,6 +17,7 @@ typedef struct send_rcl_data {
     u64 ts;
     u32 pid;
     char comm[TASK_COMM_LEN];
+    char func[28];
     char implementation[24];
     char topic_name[40];
     void *publisher;
@@ -171,6 +172,7 @@ int rcl_publish_probe(struct pt_regs *ctx, void *publisher, void *ros_message) {
             struct cyclone_pub_key key = {};
 
             //bpf_probe_read(&key.pubh, sizeof(s32), rmw_data);
+            strcpy(data.func, "rcl_publish");
             key.ros_message = ros_message;
             key.pid = data.pid;
             data.ts = bpf_ktime_get_ns(); // record timestamp at the end of this eBPF program
@@ -181,7 +183,45 @@ int rcl_publish_probe(struct pt_regs *ctx, void *publisher, void *ros_message) {
         break;
     }
 
+    strcpy(data.func, "rcl_publish");
     data.ts = bpf_ktime_get_ns(); // record timestamp at the end of this eBPF program
+    send_rcl.perf_submit(ctx, &data, sizeof(send_rcl_data_t));
+    return 0;
+}
+
+typedef struct rcl_publisher_impl_t {
+  u8 _pad[224];
+  void *rmw_handle;
+} rcl_publisher_impl_t;
+
+typedef struct rcl_publisher_t {
+  struct rcl_publisher_impl_t * impl;
+} rcl_publisher_t;
+BPF_HASH(rcl_publisher_init_hash, u32, rcl_publisher_t *);
+int rcl_publisher_init_probe(struct pt_regs *ctx, rcl_publisher_t *publisher) {
+    u32 pid = bpf_get_current_pid_tgid();
+    rcl_publisher_init_hash.update(&pid, &publisher);
+    return 0;
+}
+int rcl_publisher_init_retprobe(struct pt_regs *ctx) {
+    send_rcl_data_t data = {};
+    void *ptr;
+    rcl_publisher_t **publisher_ptr, *publisher;
+    u32 pid = bpf_get_current_pid_tgid();
+
+    publisher_ptr = rcl_publisher_init_hash.lookup(&pid);
+    if (!publisher_ptr)
+        return 0;
+    rcl_publisher_init_hash.delete(&pid);
+
+    publisher = *publisher_ptr;
+    bpf_probe_read(&ptr, sizeof(void *), &publisher->impl);
+    bpf_probe_read(&ptr, sizeof(void *), &((rcl_publisher_impl_t *)ptr)->rmw_handle);
+    data.mp_writer = ptr;
+    bpf_probe_read(&ptr, sizeof(void *), &((rmw_publisher_t *) data.mp_writer)->topic_name);
+    bpf_probe_read_str(data.topic_name, sizeof data.topic_name, ptr);
+
+    strcpy(data.func, "rcl_publisher_init");
     send_rcl.perf_submit(ctx, &data, sizeof(send_rcl_data_t));
     return 0;
 }
@@ -571,10 +611,15 @@ typedef struct rmw_take_metadata_t {
     rmw_subscription_t *subscription;
 } rmw_take_metadata_t;
 
+typedef struct cyclone_guid_seqnum_t {
+    ddsi_guid_t guid;
+    u64 seqnum;
+} cyclone_guid_seqnum_t;
+
 BPF_HASH(message_info_hash, u32, rmw_take_metadata_t, 1024);
 BPF_HASH(cyclone_take_hash, struct cyclone_pub_key, int, 1024); // a set for (ros_message, pid)
 BPF_HASH(cyclone_rhc_guid_hash, void *, ddsi_guid_t, 1024); // map pointer to rhc to guid
-BPF_HASH(cyclone_sample_seqnum_hash, void *, u64, 512); // map pointer to sample to seqnum
+BPF_HASH(cyclone_sample_seqnum_hash, void *, cyclone_guid_seqnum_t, 512); // map pointer to sample to seqnum
 
 int rmw_wait_retprobe(struct pt_regs *ctx) {
     recv_rmw_data_t data = {};
@@ -888,6 +933,7 @@ int cyclone_deliver_user_data_probe(struct pt_regs *ctx, void *sampleinfo)
 }
 int cyclone_dds_rhc_default_store_probe(struct pt_regs *ctx, void *rhc, void *wrinfo, void *sample)
 {
+    cyclone_guid_seqnum_t free_sample;
     recv_cyclonedds_data_t *data_ptr;
     ddsi_guid_t *guid;
     u32 pid;
@@ -906,7 +952,11 @@ int cyclone_dds_rhc_default_store_probe(struct pt_regs *ctx, void *rhc, void *wr
     bpf_probe_read(guid, sizeof data_ptr->guid, wrinfo);
     guid->u[3] = cpu_to_be32(guid->u[3]); // change to big endian
     cyclone_rhc_guid_hash.update(&rhc, guid);
-    cyclone_sample_seqnum_hash.update(&sample, &data_ptr->seqnum);
+    
+    memcpy(&free_sample.guid, guid, sizeof *guid);
+    free_sample.seqnum = data_ptr->seqnum;
+    cyclone_sample_seqnum_hash.update(&sample, &free_sample);
+    
     recv_cyclonedds.perf_submit(ctx, data_ptr, sizeof(recv_cyclonedds_data_t));
     return 0;
 }
@@ -947,19 +997,23 @@ int cyclone_dds_rhc_default_take_wrap_probe(struct pt_regs *ctx, void *rhc, bool
 }
 int cyclone_free_sample_probe(struct pt_regs *ctx, void *inst, void *s)
 {
+    cyclone_guid_seqnum_t *guid_seq_ptr;
     recv_cyclonedds_data_t data = {};
     u64 *seqnum_ptr;
     void *sample;
 
     bpf_probe_read(&sample, sizeof(void *), s);
-    seqnum_ptr = cyclone_sample_seqnum_hash.lookup(&sample);
-    if (!seqnum_ptr)
+    guid_seq_ptr = cyclone_sample_seqnum_hash.lookup(&sample);
+    if (!guid_seq_ptr)
         return 0;
 
-    data.seqnum = *seqnum_ptr;
+    memcpy(data.guid, &guid_seq_ptr->guid, sizeof data.guid);
+    data.seqnum = guid_seq_ptr->seqnum;
     data.ts = bpf_ktime_get_ns();
     data.pid = bpf_get_current_pid_tgid();
     strcpy(data.func, "free_sample");
+    
+    cyclone_sample_seqnum_hash.delete(&sample);
     recv_cyclonedds.perf_submit(ctx, &data, sizeof(recv_cyclonedds_data_t));
     return 0;
 }
@@ -992,6 +1046,7 @@ struct cls_egress_data_t {
 
 BPF_PERF_OUTPUT(cls_egress);
 BPF_PERF_OUTPUT(cls_ingress);
+BPF_PERF_OUTPUT(skb_events);
 
 static u16 msg2len[23] = {
         0,
@@ -1101,6 +1156,7 @@ int cls_ros2_egress_prog(struct __sk_buff *skb) {
         data.ts = bpf_ktime_get_ns();
         data.msg_id = msg_id;
         cls_egress.perf_submit(skb, &data, sizeof(struct cls_egress_data_t));
+        skb_events.perf_submit_skb(skb, skb->len, &data.magic, sizeof(data.magic));
     }
     return TC_ACT_PIPE;
 }
@@ -1141,3 +1197,20 @@ int cls_ros2_ingress_prog(struct __sk_buff *skb) {
 
     return TC_ACT_PIPE;
 }
+
+/////////////////////////////////////////////////////////////////////////////////////
+// kprobes
+/////////////////////////////////////////////////////////////////////////////////////
+struct skb_data_t {
+    u64 ts;
+    char magic[8];
+    u8 guid[16];
+    u64 seqnum;
+    u32 saddr;
+    u16 sport;
+    u32 daddr;
+    u16 dport;
+    u8 msg_id;
+};
+
+BPF_PERF_OUTPUT(skb);

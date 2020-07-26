@@ -24,11 +24,10 @@ class Key(ctypes.Structure):
 
 class trace_send(multiprocessing.Process):
     @perf_callback_factory(event_name='send_rcl',
-                           data_keys=['ts', 'implementation', 'comm', 'pid', 'topic_name', 'mp_writer', 'rmw_guid'],
+                           data_keys=['func', 'ts', 'implementation', 'comm', 'pid', 'topic_name', 'mp_writer', 'rmw_guid'],
                            remap={'mp_writer':'publisher', 'rmw_guid':'guid'})
     def print_rcl(self, *args):
         d = args[0]
-        d['func'] = 'rcl_publish'
         d['layer'] = 'rcl'
 
     @perf_callback_factory(event_name='send_fastrtps',
@@ -59,6 +58,12 @@ class trace_send(multiprocessing.Process):
         b.attach_uprobe(name=os.path.realpath('/opt/ros/dashing/lib/librcl.so'),
                         sym="rcl_publish",
                         fn_name="rcl_publish_probe")
+        b.attach_uprobe(name=os.path.realpath('/opt/ros/dashing/lib/librcl.so'),
+                        sym="rcl_publisher_init",
+                        fn_name="rcl_publisher_init_probe")
+        b.attach_uretprobe(name=os.path.realpath('/opt/ros/dashing/lib/librcl.so'),
+                           sym="rcl_publisher_init",
+                           fn_name="rcl_publisher_init_retprobe")
         # fastrtps
         b.attach_uprobe(name=os.path.realpath('/opt/ros/dashing/lib/libfastrtps.so'),
                         sym="_ZN8eprosima8fastrtps16PublisherHistory14add_pub_changeEPNS0_4rtps13CacheChange_tERNS2_11WriteParamsERSt11unique_lockISt21recursive_timed_mutexENSt6chrono10time_pointINSB_3_V212steady_clockENSB_8durationIlSt5ratioILl1ELl1000000000EEEEEE",
