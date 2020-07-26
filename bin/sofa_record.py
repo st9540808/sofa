@@ -296,7 +296,8 @@ def sofa_record(command, cfg):
                                   '-i',
                                   'any',
                                   '-w',
-                                  '%s/sofa.pcap' % logdir],
+                                  '%s/sofa.pcap' % logdir,
+                                  'udp[8:4] = 0x52545053'],
                                  stderr=FNULL)
 
         if int(os.system('command -v nvidia-smi 1>/dev/null')) == 0:
